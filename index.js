@@ -4,6 +4,11 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+const formData = require('form-data');
+const Mailgun = require('mailgun.js');
+const mailgun = new Mailgun(formData);
+const mg = mailgun.client({username: 'api', key: process.env.MAIL_GUN_API_KEY });
+
 const port = process.env.PORT || 4000;
 
 app.use(cors());
@@ -229,6 +234,22 @@ async function run() {
         $in: payment.cartIds.map(id => new ObjectId(id))
       }};
       const deletedResult = await cartCollection.deleteMany(query);
+
+      // send email
+      mg.messages.create(process.env.MAIL_SENDING_DOMAIN, {
+        from: "Mailgun Sandbox <postmaster@sandboxe186d3e1939243aba9a0c5930f9df1bd.mailgun.org>",
+        to: ["sohag231500@gmail.com"],
+        subject: "Magical Meals Order Confirmation",
+        text: "Testing some Mailgun awesomeness!",
+        html: `
+        <h1>Thank you for your order</h1>
+        <h44>Your Transaction ID: <strong>${payment.transactionId}</strong></h4>
+        <p>We would like to get your feedback on the order</p>
+        `
+      })
+      .then(msg => console.log(msg)) // logs response data
+      .catch(err => console.log(err)); // logs any error
+
       res.send({ paymentResult, deletedResult})
     })
 
