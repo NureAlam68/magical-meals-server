@@ -1,5 +1,6 @@
 const express = require('express');
 const app = express();
+const axios = require('axios');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
@@ -13,6 +14,7 @@ const port = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded());
 
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
@@ -42,7 +44,7 @@ async function run() {
     app.post('/jwt', async(req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
-        expiresIn: '1d'
+        expiresIn: '30d'
       });
       res.send({token})
     })
@@ -229,7 +231,7 @@ async function run() {
       const paymentResult = await paymentCollection.insertOne(payment);
 
       // carefully delete each item from the cart
-      console.log('payment info', payment);
+      // console.log('payment info', payment);
       const query = { _id: {
         $in: payment.cartIds.map(id => new ObjectId(id))
       }};
@@ -252,6 +254,93 @@ async function run() {
 
       res.send({ paymentResult, deletedResult})
     })
+
+    app.post('/create-ssl-payment', verifyToken, async (req, res) => {
+      const payment = req.body;
+      // console.log('payment info', payment);
+
+      const trxId = new ObjectId().toString();
+
+      payment.transactionId = trxId;
+
+      const initiate = {
+        store_id: 'magic679fa62b16031',
+        store_passwd: 'magic679fa62b16031@ssl',
+        total_amount: payment.price,
+        currency: 'BDT',
+        tran_id: trxId, 
+        success_url: 'http://localhost:4000/success',
+        fail_url: 'http://localhost:5173/fail',
+        cancel_url: 'http://localhost:5173/cancel',
+        ipn_url: 'http://localhost:4000/ipn',
+        cus_name: 'Customer Name',
+        cus_email: `${payment.email}`,
+        shipping_method:'NO',
+        product_name: 'Food',
+        product_category: 'Food',
+        product_profile: 'general',
+        cus_add1: 'Dhaka',
+        cus_add2: 'Dhaka',
+        cus_city: 'Dhaka',
+        cus_state: 'Dhaka',
+        cus_postcode: '1000',
+        cus_country: 'Bangladesh',
+        cus_phone: '01711111111',
+        cus_fax: '01711111111',
+        ship_name: 'Customer Name',
+        ship_add1: 'Dhaka',
+        ship_add2: 'Dhaka',
+        ship_city: 'Dhaka',
+        ship_state: 'Dhaka',
+        ship_postcode: 1000,
+        ship_country: 'Bangladesh',
+    };
+    const isResponse = await axios({
+      url: 'https://sandbox.sslcommerz.com/gwprocess/v4/api.php',
+      method: 'post',
+      data: initiate,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    })
+    const saveData = await paymentCollection.insertOne(payment);
+    const gatewayUrl = isResponse?.data?.GatewayPageURL;
+    // console.log('gatewayUrl', gatewayUrl);
+
+    res.send({gatewayUrl});
+    })
+
+    app.post('/success', async(req, res) => {
+      //success data
+      const paymentSuccess = req.body;
+      // console.log('payment success', paymentSuccess);
+
+      // validation data
+      const {data} = await axios.get(`https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php?val_id=${paymentSuccess.val_id}&store_id=magic679fa62b16031&store_passwd=magic679fa62b16031@ssl&v=1&format=json`);
+      if(data.status !== 'VALID') {
+        return res.send('payment failed');
+      }
+
+      // update payment 
+      const updatePayment = await paymentCollection.updateOne({transactionId: data.tran_id}, {
+        $set: {
+          status: 'success',
+        }
+      })
+      const payment = await paymentCollection.findOne({transactionId: data.tran_id});
+      // console.log('payment', payment);
+
+      // delete each item from the cart
+      const query = { _id: {
+        $in: payment.cartIds.map(id => new ObjectId(id))
+      }};
+      const deletedResult = await cartCollection.deleteMany(query);
+      // console.log('deletedResult', deletedResult);
+
+      res.redirect('https://magical-meals.web.app/dashboard/cart');
+      // console.log('updatePayment', updatePayment);
+      // console.log('isValidPayment', data);
+    });
 
     app.get('/admin-stats', verifyToken, verifyAdmin, async(req, res) => {
       const users = await userCollection.estimatedDocumentCount();
